@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>US Accidents: parallel coordinates</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+  :root { --ink:#1d2733; --muted:#6b7785; --bg:#f4f6f8; --panel:#fff; --line:#d9dee4; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
+  header { display:flex; flex-wrap:wrap; gap:12px 20px; align-items:center; padding:12px 20px; background:var(--panel); border-bottom:1px solid var(--line); }
+  h1 { font-size:16px; margin:0 12px 0 0; }
+  .tabs button, .btn, .legend button { font:inherit; border:1px solid var(--line); background:var(--panel); color:var(--ink); padding:5px 12px; border-radius:6px; cursor:pointer; }
+  .tabs button.on { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .tabs button:disabled { opacity:.4; cursor:default; }
+  .legend { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .legend button { display:flex; align-items:center; gap:6px; padding:4px 10px; }
+  .legend button.off { opacity:.35; }
+  .sw { width:12px; height:12px; border:1px solid rgba(0,0,0,.45); border-radius:50%; flex:none; }
+  .bundle { display:flex; align-items:center; gap:8px; white-space:nowrap; }
+  .bundle input { width:100px; accent-color:var(--ink); }
+  #count { color:var(--muted); margin-left:auto; font-variant-numeric:tabular-nums; }
+  #wrap { position:relative; margin:12px 20px; background:var(--panel); border:1px solid var(--line); border-radius:8px; height:calc(100vh - 130px); min-height:420px; }
+  canvas, svg { position:absolute; inset:0; }
+  .axis text { fill:var(--ink); font-size:11px; }
+  .axis path, .axis line { stroke:#9aa5b1; }
+  .label { font-size:12px; font-weight:600; cursor:grab; fill:var(--ink); }
+  .label:hover { fill:#c8102e; }
+  .brush .selection { fill:rgba(29,39,51,.12); stroke:var(--ink); }
+  #tip { position:absolute; pointer-events:none; background:var(--ink); color:#fff; padding:6px 9px; border-radius:6px; font-size:12px; line-height:1.5; display:none; white-space:nowrap; z-index:5; }
+  #empty { position:absolute; inset:0; display:grid; place-content:center; text-align:center; color:var(--muted); }
+  small { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>US Accidents: parallel coordinates</h1>
+  <div class="tabs">
+    <button id="tab-road" disabled>Road infrastructure</button>
+    <button id="tab-weather" disabled>Weather</button>
+  </div>
+  <label class="bundle" title="Move lines toward the average trend for their severity. Brushing still uses the original values.">
+    Edge bundling <input id="bundle" type="range" min="0" max="80" value="35">
+    <output id="bundle-value">35%</output>
+  </label>
+  <button class="btn" id="reset">Clear brushes</button>
+  <div class="legend" id="legend"></div>
+  <div id="count"></div>
+</header>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <svg id="svg"></svg>
+  <div id="empty"><div id="empty-message">Loading road and weather data...</div></div>
+  <div id="tip"></div>
+</div>
+
+<script>
+/* ---------- state ---------- */
+const M = { t: 60, r: 50, b: 30, l: 50 };
+// Severity 1 (least) to 4 (most), using dark, high-contrast colors on white.
+const sevColor = d3.scaleOrdinal().domain([1, 2, 3, 4]).range(["#0072b2", "#a65300", "#008556", "#c43c39"]);
+const datasets = {};            // name -> { rows, dims }
+let cur = null;                 // current dataset name
+let rows = [], dims = [], order = [], scales = {}, xpos = {};
+let brushes = {};               // dim -> [y0, y1] in pixels
+let hiddenSev = new Set();
+let inverted = {};
+let bundleCenters = new Map(), bundleStrength = 0.35;
+let queued = false, hover = null, dragging = false, W = 0, H = 0, IW = 0, IH = 0;
+
+const wrap = document.getElementById("wrap");
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const svg = d3.select("#svg");
+const tip = document.getElementById("tip");
+
+/* ---------- loading ---------- */
+function parseCSV(text) {
+  const raw = d3.csvParse(text.trim());
+  // Booleans become 0/1 so True/False columns (Bump, Crossing...) behave as numbers
+  const conv = v => {
+    const s = String(v ?? "").trim().toLowerCase();
+    return s === "true" ? 1 : s === "false" ? 0 : s === "" ? NaN : +s;
+  };
+  const cols = raw.columns;
+  const clean = [];
+  for (const r of raw) {
+    const v = {};
+    let ok = true;
+    for (const c of cols) { v[c] = conv(r[c]); if (Number.isNaN(v[c])) { ok = false; break; } }
+    // j = fixed random jitter per dim, used to un-stack lines on categorical axes
+    if (ok) clean.push({ v, j: Object.fromEntries(cols.map(c => [c, Math.random() * 2 - 1])) });
+  }
+  if (!cols.includes("Severity") || clean.length === 0) throw new Error("CSV must contain valid rows and a Severity column.");
+  const severityValues = [...new Set(clean.map(r => r.v.Severity))].sort((a, b) => a - b);
+  for (const r of clean) {
+    r.severity = severityValues.indexOf(r.v.Severity) + 1;
+    r.v.Severity = r.severity;
+  }
+  return { rows: clean, dims: cols };
+}
+
+function register(text) {
+  const ds = parseCSV(text);
+  const name = ds.dims.includes("Temperature(F)") ? "weather" : "road";
+  datasets[name] = ds;
+  document.getElementById("tab-" + name).disabled = false;
+  if (!cur || cur === name) show(name);
+}
+
+async function loadDatasets() {
+  const files = ["road_parallel.csv", "weather_parallel.csv"];
+  try {
+    const texts = await Promise.all(files.map(async file => {
+      const response = await fetch(file);
+      if (!response.ok) throw new Error(`${file} returned HTTP ${response.status}`);
+      return response.text();
+    }));
+    texts.forEach(register);
+  } catch (error) {
+    console.error("Unable to load datasets:", error);
+    document.getElementById("empty-message").textContent =
+      `Unable to load the data files automatically. Serve this folder with 'python -m http.server' or open the generated index.html. ${error.message}`;
+  }
+}
+
+// build.py embeds both CSVs for a standalone index.html; otherwise load them beside this page.
+if (typeof EMBEDDED !== "undefined") EMBEDDED.forEach(register);
+else loadDatasets();
+
+["road", "weather"].forEach(n => document.getElementById("tab-" + n).onclick = () => show(n));
+
+/* ---------- layout ---------- */
+function show(name) {
+  cur = name;
+  ({ rows, dims } = datasets[name]);
+  order = dims.slice();
+  brushes = {}; inverted = {}; hiddenSev.clear();
+  document.getElementById("empty").style.display = "none";
+  ["road", "weather"].forEach(n => document.getElementById("tab-" + n).classList.toggle("on", n === name));
+  build();
+}
+
+function buildScales() {
+  scales = {};
+  for (const d of dims) {
+    const vals = rows.map(r => r.v[d]);
+    const distinct = [...new Set(vals)].sort((a, b) => a - b);
+    const range = inverted[d] ? [0, IH] : [IH, 0];
+    // Few distinct values (Severity, binary flags) -> ordinal axis; otherwise continuous
+    scales[d] = distinct.length <= 6
+      ? d3.scalePoint(distinct, range).padding(0.4)
+      : d3.scaleLinear(d3.extent(vals), range).nice();
+  }
+}
+
+function layoutX() {
+  const xs = d3.scalePoint(order, [0, IW]);
+  order.forEach(d => xpos[d] = xs(d));
+}
+
+function build() {
+  W = wrap.clientWidth; H = wrap.clientHeight;
+  IW = W - M.l - M.r; IH = H - M.t - M.b;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr;
+  cv.style.width = W + "px"; cv.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  svg.attr("width", W).attr("height", H).selectAll("*").remove();
+
+  buildScales(); layoutX();
+  buildBundleCenters();
+  buildLegend();
+
+  const g = svg.append("g").attr("transform", `translate(${M.l},${M.t})`);
+  const ax = g.selectAll(".dim").data(dims, d => d).join("g").attr("class", "dim")
+    .attr("transform", d => `translate(${xpos[d]},0)`);
+
+  ax.append("g").attr("class", "axis").each(function (d) { d3.select(this).call(d3.axisLeft(scales[d]).ticks(8)); });
+
+  // Brush per axis; selections combine with AND across axes
+  ax.append("g").attr("class", "brush").each(function (d) {
+    d3.select(this).call(d3.brushY().extent([[-12, 0], [12, IH]]).on("start brush end", e => {
+      if (e.selection) brushes[d] = e.selection; else delete brushes[d];
+      schedule();
+    }));
+  });
+
+  // Axis label: click to flip direction, drag to reorder
+  ax.append("text").attr("class", "label").attr("y", -18).attr("text-anchor", "middle")
+    .text(d => d)
+    .on("click", (e, d) => { if (e.defaultPrevented) return; inverted[d] = !inverted[d]; delete brushes[d]; build(); })
+    .call(d3.drag().container(g.node()).subject((e, d) => ({ x: xpos[d] }))
+      .on("start", () => dragging = true)
+      .on("drag", (e, d) => {
+        xpos[d] = Math.max(0, Math.min(IW, e.x));
+        order.sort((a, b) => xpos[a] - xpos[b]);
+        ax.attr("transform", k => `translate(${xpos[k]},0)`);
+        schedule();
+      })
+      .on("end", (e, d) => {
+        dragging = false;
+        layoutX();
+        ax.transition().duration(200).attr("transform", k => `translate(${xpos[k]},0)`);
+        schedule();
+      }));
+
+  svg.on("mousemove", onMove).on("mouseleave", () => { hover = null; tip.style.display = "none"; schedule(); });
+  schedule();
+}
+
+function buildLegend() {
+  const sevs = [...new Set(rows.map(r => r.severity))].sort((a, b) => a - b);
+  const lg = d3.select("#legend");
+  lg.selectAll("*").remove();
+  lg.selectAll("button").data(sevs).join("button")
+    .classed("off", s => hiddenSev.has(s))
+    .html(s => `<span class="sw" style="background:${sevColor(s)}"></span>Severity ${s}`)
+    .on("click", (e, s) => { hiddenSev.has(s) ? hiddenSev.delete(s) : hiddenSev.add(s); buildLegend(); schedule(); });
+}
+
+document.getElementById("reset").onclick = () => { brushes = {}; if (cur) build(); };
+document.getElementById("bundle").addEventListener("input", e => {
+  bundleStrength = Number(e.target.value) / 100;
+  document.getElementById("bundle-value").value = `${e.target.value}%`;
+  schedule();
+});
+
+/* ---------- drawing ---------- */
+function schedule() { if (!queued) { queued = true; requestAnimationFrame(() => { queued = false; draw(); }); } }
+
+const isActive = r => !hiddenSev.has(r.severity) &&
+  Object.entries(brushes).every(([d, [a, b]]) => { const y = scales[d](r.v[d]); return y >= a && y <= b; });
+
+function buildBundleCenters() {
+  bundleCenters = new Map();
+  for (const r of rows) {
+    if (!bundleCenters.has(r.severity)) bundleCenters.set(r.severity, Object.fromEntries(dims.map(d => [d, { sum: 0, count: 0 }])));
+    for (const d of dims) {
+      const point = bundleCenters.get(r.severity)[d];
+      point.sum += scales[d](r.v[d]);
+      point.count++;
+    }
+  }
+  for (const centers of bundleCenters.values()) {
+    for (const d of dims) centers[d] = centers[d].sum / centers[d].count;
+  }
+}
+
+function pointY(r, d) {
+  const scale = scales[d];
+  const actual = scale(r.v[d]) + (scale.step ? r.j[d] * scale.step() * 0.18 : 0);
+  const center = bundleCenters.get(r.severity)?.[d];
+  return center === undefined ? actual : actual + (center - actual) * bundleStrength;
+}
+
+// Pixel coordinates of one row's polyline; ordinal axes get a small jitter so identical rows fan out
+function pts(r) {
+  return order.map(d => [xpos[d], pointY(r, d)]);
+}
+
+function trace(r) {
+  const p = pts(r);
+  ctx.beginPath(); ctx.moveTo(p[0][0], p[0][1]);
+  for (let i = 1; i < p.length; i++) ctx.lineTo(p[i][0], p[i][1]);
+}
+
+function draw() {
+  if (!rows.length) return;
+  ctx.clearRect(0, 0, W, H);
+  ctx.save(); ctx.translate(M.l, M.t); ctx.lineWidth = 1.1;
+
+  const act = [], inact = [];
+  for (const r of rows) (isActive(r) ? act : inact).push(r);
+
+  // Filtered-out lines stay as a faint grey backdrop for context
+  ctx.strokeStyle = "rgba(150,160,170,.07)";
+  for (const r of inact) { trace(r); ctx.stroke(); }
+
+  // Opacity scales down as more lines are selected so dense areas stay readable
+  ctx.globalAlpha = Math.max(0.1, Math.min(0.7, 500 / Math.max(act.length, 1)));
+  for (const s of sevColor.domain()) {
+    ctx.strokeStyle = sevColor(s);
+    for (const r of act) if (r.severity === s) { trace(r); ctx.stroke(); }
+  }
+  ctx.globalAlpha = 1;
+
+  if (hover) { trace(hover); ctx.lineWidth = 2.5; ctx.strokeStyle = "#1d2733"; ctx.stroke(); }
+  ctx.restore();
+
+  document.getElementById("count").textContent =
+    `${act.length.toLocaleString()} of ${rows.length.toLocaleString()} accidents selected`;
+}
+
+/* ---------- hover ---------- */
+function onMove(e) {
+  if (dragging || e.buttons) return;
+  const [mx0, my0] = d3.pointer(e, wrap);
+  const mx = mx0 - M.l, my = my0 - M.t;
+  // Find the segment under the cursor, then the active row whose line is closest to it
+  let i = order.findIndex((d, k) => k < order.length - 1 && mx >= xpos[d] && mx <= xpos[order[k + 1]]);
+  if (i < 0) { hover = null; tip.style.display = "none"; schedule(); return; }
+  const a = order[i], b = order[i + 1], t = (mx - xpos[a]) / (xpos[b] - xpos[a]);
+  let best = null, bd = 8;
+  for (const r of rows) {
+    if (!isActive(r)) continue;
+    const ya = pointY(r, a);
+    const yb = pointY(r, b);
+    const dist = Math.abs(ya + (yb - ya) * t - my);
+    if (dist < bd) { bd = dist; best = r; }
+  }
+  hover = best;
+  if (best) {
+    tip.innerHTML = dims.map(d => `${d}: <b>${best.v[d]}</b>`).join("<br>");
+    tip.style.display = "block";
+    tip.style.left = Math.min(mx0 + 14, W - 190) + "px";
+    tip.style.top = (my0 + 14) + "px";
+  } else tip.style.display = "none";
+  schedule();
+}
+
+window.addEventListener("resize", () => { if (cur) build(); });
+</script>
+</body>
+</html>

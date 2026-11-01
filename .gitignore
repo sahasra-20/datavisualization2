@@ -1,0 +1,30 @@
+# NetCDF meteorological data files (gridMET datasets are >100MB)
+*.nc
+*.nc4
+*.h5
+*.hdf5
+Contourplots/data/*.nc
+
+# Large raw datasets
+US_Accidents*.csv
+*.zip
+*.tar.gz
+*.parquet
+
+# Python & Jupyter checkpoints and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# Environment and editor files
+.env
+.venv
+env/
+venv/
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db

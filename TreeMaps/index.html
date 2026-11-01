@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>US Accidents | Interactive Treemap</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <style>
+        :root {
+            color-scheme: light;
+            font-family: Inter, "Segoe UI", Arial, sans-serif;
+            color: #17243b;
+            background: #f3f6fb;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 38px 24px 48px;
+        }
+
+        main {
+            width: min(1320px, 100%);
+            margin: 0 auto;
+        }
+
+        .page-heading {
+            margin-bottom: 26px;
+            text-align: center;
+        }
+
+        .eyebrow {
+            margin: 0 0 8px;
+            color: #526785;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            margin: 0;
+            color: #14213a;
+            font-size: clamp(26px, 4vw, 38px);
+            letter-spacing: -0.035em;
+        }
+
+        .subtitle {
+            max-width: 650px;
+            margin: 10px auto 0;
+            color: #63728a;
+            font-size: 15px;
+            line-height: 1.6;
+        }
+
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: end;
+            justify-content: center;
+            gap: 14px;
+            margin: 0 auto 18px;
+            padding: 16px;
+            border: 1px solid #e0e7f0;
+            border-radius: 14px;
+            background: #fff;
+            box-shadow: 0 8px 26px rgb(34 54 84 / 6%);
+        }
+
+        .control {
+            display: grid;
+            gap: 6px;
+        }
+
+        .control label {
+            color: #53647d;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        select, button {
+            min-height: 40px;
+            border: 1px solid #d5deea;
+            border-radius: 8px;
+            background: #fff;
+            color: #1d2c44;
+            font: inherit;
+            font-size: 14px;
+        }
+
+        select {
+            min-width: 190px;
+            padding: 0 34px 0 11px;
+        }
+
+        select:focus-visible, button:focus-visible, rect:focus-visible {
+            outline: 3px solid #7aa7ed;
+            outline-offset: 2px;
+        }
+
+        select:disabled {
+            color: #8290a4;
+            background: #f4f6f9;
+        }
+
+        button {
+            padding: 0 15px;
+            cursor: pointer;
+            font-weight: 650;
+            transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+        }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-1px);
+            border-color: #9eb4d1;
+            background: #f5f8fc;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.48;
+        }
+
+        .toolbar-hint {
+            align-self: center;
+            max-width: 220px;
+            margin: 0;
+            color: #718097;
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .severity-key {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px 20px;
+            margin: 0 0 18px;
+            padding: 14px 18px;
+            border: 1px solid #dfe7f1;
+            border-radius: 12px;
+            background: #fff;
+        }
+
+        .severity-key[hidden] {
+            display: none;
+        }
+
+        .severity-key p {
+            margin: 0;
+            color: #566780;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .severity-key strong {
+            color: #1c2b43;
+        }
+
+        .severity-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: #40516a;
+            font-size: 12px;
+            font-weight: 650;
+        }
+
+        .legend-swatch {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        .visualization {
+            overflow: hidden;
+            border: 1px solid #e0e7f0;
+            border-radius: 16px;
+            background: #fff;
+            box-shadow: 0 14px 36px rgb(34 54 84 / 8%);
+        }
+
+        .chart-header {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 15px 20px;
+            border-bottom: 1px solid #e8edf4;
+        }
+
+        #breadcrumb {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 7px;
+            color: #687891;
+            font-size: 13px;
+        }
+
+        #breadcrumb button {
+            min-height: 28px;
+            padding: 2px 6px;
+            border: 0;
+            color: #526782;
+            font-size: 13px;
+        }
+
+        #breadcrumb button[aria-current="page"] {
+            color: #162640;
+            cursor: default;
+            font-weight: 750;
+        }
+
+        #breadcrumb button[aria-current="page"]:hover {
+            transform: none;
+            background: transparent;
+        }
+
+        .crumb-separator {
+            color: #a4afbf;
+        }
+
+        .chart-summary {
+            display: flex;
+            gap: 22px;
+            margin: 0;
+        }
+
+        .summary-item {
+            display: grid;
+            gap: 2px;
+        }
+
+        .summary-item dt {
+            color: #728198;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        .summary-item dd {
+            margin: 0;
+            color: #1c2b43;
+            font-size: 14px;
+            font-weight: 750;
+        }
+
+        #status {
+            min-height: 20px;
+            margin: 0;
+            padding: 9px 20px 0;
+            color: #9a4b16;
+            font-size: 13px;
+        }
+
+        #chart {
+            display: block;
+            width: 100%;
+            height: 650px;
+            background: #edf2f8;
+        }
+
+        .treemap-cell {
+            stroke: #f3f6fb;
+            stroke-width: 2px;
+            cursor: pointer;
+            transition: opacity 130ms ease, stroke 130ms ease, stroke-width 130ms ease;
+        }
+
+        .treemap-cell:hover, .treemap-cell:focus-visible {
+            stroke: #fff;
+            stroke-width: 4px;
+        }
+
+        .treemap-cell:focus {
+            outline: none;
+        }
+
+        .cell-group.is-dimmed .treemap-cell,
+        .cell-group.is-dimmed .label {
+            opacity: 0.72;
+        }
+
+        .label {
+            fill: #fff;
+            font-size: 12px;
+            font-weight: 650;
+            pointer-events: none;
+            paint-order: stroke;
+            stroke: rgb(13 27 48 / 25%);
+            stroke-width: 2px;
+            stroke-linejoin: round;
+        }
+
+        #tooltip {
+            position: fixed;
+            z-index: 5;
+            display: none;
+            padding: 9px 12px;
+            border: 1px solid rgb(255 255 255 / 14%);
+            border-radius: 8px;
+            background: #17243b;
+            box-shadow: 0 8px 22px rgb(12 25 45 / 22%);
+            color: #fff;
+            font-size: 12px;
+            line-height: 1.5;
+            pointer-events: none;
+        }
+
+        #tooltip strong, #tooltip span {
+            display: block;
+        }
+
+        #tooltip span {
+            color: #d3deee;
+        }
+
+        @media (max-width: 700px) {
+            body {
+                padding: 26px 13px 32px;
+            }
+
+            .toolbar {
+                align-items: stretch;
+            }
+
+            .control, .control select {
+                width: 100%;
+            }
+
+            .toolbar-hint {
+                max-width: none;
+                width: 100%;
+            }
+
+            .chart-header {
+                align-items: flex-start;
+                padding: 13px 14px;
+            }
+
+            .chart-summary {
+                width: 100%;
+                justify-content: space-between;
+            }
+
+            #chart {
+                height: 520px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+<main>
+    <header class="page-heading">
+        <h1>US Accidents Tree Maps</h1>
+        <p class="subtitle">Compare accident counts across states, cities, time of day, and severity. Select a tile to explore its breakdown.</p>
+    </header>
+
+    <section class="toolbar" aria-label="Treemap controls">
+        <div class="control">
+            <label for="dataset">View</label>
+            <select id="dataset">
+                <option value="accidents_state_city.json">State → City</option>
+                <option value="accidents_state_severity.json">State → Severity</option>
+                <option value="accidents_day_night_severity.json">Day / Night → Severity</option>
+            </select>
+        </div>
+        <div class="control">
+            <label for="layout">Tile layout</label>
+            <select id="layout">
+                <option value="squarify">Squarified</option>
+                <option value="sliceDice">Slice and Dice</option>
+            </select>
+        </div>
+        <button id="back" type="button" disabled>← Back</button>
+        <p class="toolbar-hint" id="layout-hint">Slice and Dice is available for State → City only.</p>
+    </section>
+
+    <aside id="severity-key" class="severity-key" aria-label="State and severity color key" hidden>
+        <p><strong>How to read color:</strong> At the state level, darker blue means more accidents. Inside a state, color identifies the severity category, not average severity.</p>
+        <div id="severity-legend" class="severity-legend" aria-label="Severity categories"></div>
+    </aside>
+
+    <section class="visualization" aria-label="Accident treemap">
+        <div class="chart-header">
+            <nav id="breadcrumb" aria-label="Treemap location"></nav>
+            <dl class="chart-summary">
+                <div class="summary-item">
+                    <dt>Accidents</dt>
+                    <dd id="accident-count">—</dd>
+                </div>
+                <div class="summary-item">
+                    <dt>Groups</dt>
+                    <dd id="group-count">—</dd>
+                </div>
+            </dl>
+        </div>
+        <p id="status" role="status" aria-live="polite"></p>
+        <svg id="chart" role="img" aria-label="Interactive treemap of US accident counts"></svg>
+    </section>
+</main>
+
+<div id="tooltip" role="tooltip">
+    <strong></strong>
+    <span></span>
+</div>
+
+<script>
+const chartElement = document.getElementById("chart");
+const datasetSelect = document.getElementById("dataset");
+const layoutSelect = document.getElementById("layout");
+const backButton = document.getElementById("back");
+const tooltip = d3.select("#tooltip");
+const tooltipName = tooltip.select("strong");
+const tooltipCount = tooltip.select("span");
+const svg = d3.select(chartElement);
+const chartHeight = 650;
+const firstDataset = "accidents_state_city.json";
+const severityDataset = "accidents_state_severity.json";
+const severityColors = {
+    "1": "#18794e",
+    "2": "#137c72",
+    "3": "#a95008",
+    "4": "#b42332"
+};
+
+let root;
+let currentNode;
+let history = [];
+
+function getChartWidth() {
+    return Math.max(1, chartElement.clientWidth);
+}
+
+function getLayout() {
+    if (datasetSelect.value === firstDataset && layoutSelect.value === "sliceDice") {
+        return d3.treemapSliceDice;
+    }
+
+    return d3.treemapSquarify;
+}
+
+function updateLayoutAvailability() {
+    const sliceDiceOption = layoutSelect.querySelector('option[value="sliceDice"]');
+    const isFirstDataset = datasetSelect.value === firstDataset;
+
+    sliceDiceOption.disabled = !isFirstDataset;
+    if (!isFirstDataset && layoutSelect.value === "sliceDice") {
+        layoutSelect.value = "squarify";
+    }
+
+    document.getElementById("layout-hint").textContent = isFirstDataset
+        ? "Choose a layout, or select a tile to drill down."
+        : "This view uses Squarified layout.";
+
+    updateColorKey();
+}
+
+function updateColorKey() {
+    const showKey = datasetSelect.value === severityDataset;
+    d3.select("#severity-key").property("hidden", !showKey);
+
+    d3.select("#severity-legend")
+        .selectAll(".legend-item")
+        .data(Object.entries(severityColors), ([severity]) => severity)
+        .join(enter => {
+            const item = enter.append("span").attr("class", "legend-item");
+            item.append("span")
+                .attr("class", "legend-swatch")
+                .attr("aria-hidden", "true");
+            item.append("span").attr("class", "legend-label");
+            return item;
+        })
+        .each(function([severity, color]) {
+            d3.select(this).select(".legend-swatch").style("background-color", color);
+            d3.select(this).select(".legend-label").text(`Severity ${severity}`);
+        });
+}
+
+function loadTreemap() {
+    const file = datasetSelect.value;
+    document.getElementById("status").textContent = "Loading treemap…";
+    tooltip.style("display", "none");
+    updateLayoutAvailability();
+
+    d3.json(file).then(data => {
+        root = d3.hierarchy(data)
+            .sum(d => Number(d.value) || 0)
+            .sort((a, b) => b.value - a.value);
+
+        history = [];
+        currentNode = root;
+        createLayout();
+        drawTreemap();
+        document.getElementById("status").textContent = "";
+    }).catch(error => {
+        console.error("Error loading JSON:", error);
+        document.getElementById("status").textContent =
+            "Could not load the data. Check the JSON filename.";
+        svg.selectAll("*").remove();
+    });
+}
+
+function createLayout() {
+    const width = getChartWidth();
+
+    svg.attr("viewBox", `0 0 ${width} ${chartHeight}`)
+        .attr("height", chartHeight);
+
+    d3.treemap()
+        .size([width, chartHeight])
+        .tile(getLayout())
+        .padding(3)
+        .round(true)(root);
+}
+
+function getColor(d) {
+    if (d.data.name && d.data.name.startsWith("Severity")) {
+        const severity = d.data.name.split(" ")[1];
+        return severityColors[severity] || "#777";
+    }
+
+    if (d.data.name === "Day") {
+        return "#3182bd";
+    }
+
+    if (d.data.name === "Night") {
+        return "#756bb1";
+    }
+
+    const proportion = d.value / (root.value || 1);
+    if (datasetSelect.value === firstDataset) {
+        return d3.interpolateBlues(0.25 + 0.7 * Math.sqrt(proportion));
+    }
+
+    if (datasetSelect.value === severityDataset) {
+        const largestStateValue = d3.max(root.children || [], child => child.value) || 1;
+        const relativeValue = Math.min(1, d.value / largestStateValue);
+
+        return d3.interpolateBlues(0.32 + 0.68 * Math.sqrt(relativeValue));
+    }
+
+    return d3.interpolateBlues(proportion);
+}
+
+function updateBreadcrumb() {
+    const breadcrumb = d3.select("#breadcrumb");
+    breadcrumb.selectAll("*").remove();
+
+    const nodes = [...history, currentNode];
+    nodes.forEach((node, index) => {
+        if (index > 0) {
+            breadcrumb.append("span")
+                .attr("class", "crumb-separator")
+                .attr("aria-hidden", "true")
+                .text("/");
+        }
+
+        breadcrumb.append("button")
+            .attr("type", "button")
+            .attr("aria-current", index === nodes.length - 1 ? "page" : null)
+            .text(node.data.name)
+            .on("click", () => {
+                currentNode = node;
+                history = nodes.slice(0, index);
+                drawTreemap();
+            });
+    });
+}
+
+function enterNode(node) {
+    if (!node.children) {
+        return;
+    }
+
+    history.push(currentNode);
+    currentNode = node;
+    drawTreemap();
+}
+
+function showTooltip(event, d) {
+    tooltipName.text(d.data.name);
+    tooltipCount.text(`Accidents: ${d.value.toLocaleString()}`);
+    tooltip
+        .style("display", "block")
+        .style("left", `${event.clientX + 12}px`)
+        .style("top", `${event.clientY + 12}px`);
+}
+
+function drawTreemap() {
+    if (!currentNode) {
+        return;
+    }
+
+    const width = getChartWidth();
+    const x = d3.scaleLinear()
+        .domain([currentNode.x0, currentNode.x1])
+        .range([0, width]);
+    const y = d3.scaleLinear()
+        .domain([currentNode.y0, currentNode.y1])
+        .range([0, chartHeight]);
+    const children = currentNode.children || [];
+
+    updateBreadcrumb();
+    document.getElementById("accident-count").textContent =
+        currentNode.value.toLocaleString();
+    document.getElementById("group-count").textContent =
+        children.length.toLocaleString();
+    backButton.disabled = history.length === 0;
+    tooltip.style("display", "none");
+
+    svg.selectAll("*").remove();
+
+    const cells = svg.selectAll(".cell-group")
+        .data(children)
+        .join("g")
+        .attr("class", "cell-group");
+
+    cells.append("rect")
+        .attr("class", "treemap-cell")
+        .attr("x", d => x(d.x0))
+        .attr("y", d => y(d.y0))
+        .attr("width", d => Math.max(0, x(d.x1) - x(d.x0)))
+        .attr("height", d => Math.max(0, y(d.y1) - y(d.y0)))
+        .attr("fill", d => getColor(d))
+        .attr("tabindex", d => d.children ? 0 : -1)
+        .attr("aria-label", d => `${d.data.name}: ${d.value.toLocaleString()} accidents`)
+        .on("click", (event, d) => enterNode(d))
+        .on("keydown", (event, d) => {
+            if (d.children && (event.key === "Enter" || event.key === " ")) {
+                event.preventDefault();
+                enterNode(d);
+            }
+        })
+        .on("pointerenter", function(event, d) {
+            cells.classed("is-dimmed", cell => cell !== d);
+            showTooltip(event, d);
+        })
+        .on("pointermove", showTooltip)
+        .on("pointerleave", () => {
+            cells.classed("is-dimmed", false);
+            tooltip.style("display", "none");
+        });
+
+    cells.append("text")
+        .attr("class", "label")
+        .attr("x", d => x(d.x0) + 7)
+        .attr("y", d => y(d.y0) + 18)
+        .text(d => d.data.name)
+        .each(function(d) {
+            const rectWidth = x(d.x1) - x(d.x0);
+            const rectHeight = y(d.y1) - y(d.y0);
+
+            if (rectWidth < 55 || rectHeight < 25) {
+                d3.select(this).remove();
+            }
+        });
+}
+
+datasetSelect.addEventListener("change", loadTreemap);
+
+layoutSelect.addEventListener("change", () => {
+    if (root) {
+        createLayout();
+        drawTreemap();
+    }
+});
+
+backButton.addEventListener("click", () => {
+    if (history.length > 0) {
+        currentNode = history.pop();
+        drawTreemap();
+    }
+});
+
+window.addEventListener("resize", () => {
+    if (root) {
+        createLayout();
+        drawTreemap();
+    }
+});
+
+loadTreemap();
+</script>
+</body>
+</html>
